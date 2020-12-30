@@ -1,0 +1,266 @@
+######################################################################################################################
+####  Name        : NPC RMB Sqoop  Import Incremental                                                          #######
+####  Purpose     : To Extract NPC RMB data from Oracle to HDFS                                                     #######
+####  Script Param: Application directory                                                                      #######i
+####  Parameters  : Application,Dataset,Connection String,Source Table Name,Mappers,column list,condiions      #######
+####  Author      : BDA Project                                                                                #######
+######################################################################################################################
+#!/bin/bash
+
+ tmpDir=/tmp/mercury_rmb_sqoop
+ rm -r ${tmpDir}
+mkdir ${tmpDir}
+
+export app_dir=/opt
+
+hadoop fs -get ${app_dir}/scripts/ingest_app_env.txt ${tmpDir}/
+hadoop fs -get ${app_dir}/scripts/config/mercury_rmb_sqoop_config_incremental_monthly.txt ${tmpDir}/
+hadoop fs -get ${app_dir}/scripts/config/ingest_mercury_rmb_date_incremental_monthly.txt ${tmpDir}/
+
+. ${tmpDir}/ingest_app_env.txt
+export queue_name=ingestion
+export log_file="${tmpDir}/sqoop_import_mercury_rmb_incremental_monthly$(date "+%Y%m%d%H%M").log"
+export Data_Raw_Org=$Raw_Vantiv
+export config_file="${tmpDir}/mercury_rmb_sqoop_config_incremental_monthly.txt"
+
+process_date=$(cat ${tmpDir}/ingest_mercury_rmb_date_incremental_monthly.txt)
+time=`date +%m/%d/%Y" "%T`
+#export TODAY=$(date +"%Y%m%d")
+#date -d "-$(date +%d) days -0 month" +%Y-%m-%d
+export TODAY=$(date -d "-$(date +%d) days -0 month" +"%Y-%m-%d")
+echo "today: $TODAY" >> $log_file
+FORMAT_DATE=`date -d $TODAY +'%Y-%m-%d'`
+echo "FORMAT_DATE: $FORMAT_DATE" >> $log_file
+if [ "${process_date}" != "" ]; then
+   TODAY=$process_date
+fi
+i=0
+while [ ! -f /tmp/mercury_rmb_monthly_done.tag ] ;
+do
+       #3600
+        let i=$i+1
+       hadoop fs -test -e  ${Sterling}/mercury_rmb_monthly_done.tag
+       if [ $? -eq 0 ]; then
+          echo  "Tag File Expected is Present ${Sterling}/mercury_rmb_monthly_done.tag " >> $log_file
+          touch /tmp/mercury_rmb_monthly_done.tag
+       fi
+         if [ $i -gt 5 ]; then
+        echo "completed five iterations exiting the process" >> $log_file
+		 hadoop fs -put $log_file ${log_dir}/log/
+          rm -r ${tmpDir}
+        exit 10
+        fi
+
+   done
+rm  /tmp/mercury_rmb_monthly_done.tag
+   echo "INFO- Got File Process Start Time  $START_TIME "  >> $log_file
+
+FORMAT_DATE=`date -d $TODAY +'%Y-%m-%d'`
+#FORMAT_DATE=`$TODAY +'%Y-%m-%d'`
+echo "FORMAT_DATE: $FORMAT_DATE" >> $log_file
+#FORMAT_DATE=`date -d "-$(date +%d) days -0 month" +%Y-%m-%d`
+extract_stamp='extract_date='$FORMAT_DATE
+query_date=$FORMAT_DATE
+echo "query_date: $query_date" >> $log_file
+export extract_query='extract_date='"'"$FORMAT_DATE"'"
+
+ctl_update_start_date="`echo \"$FORMAT_DATE 00:00:00\"`"
+ctl_update_end_date="`echo \"$FORMAT_DATE 23:59:59\"`"
+echo "ctl_update_start_date : $ctl_update_start_date"
+
+echo " FORMAT_DATE= $FORMAT_DATE" >>$log_file
+
+if [ "${queue_name}" != "" ]; then
+   pig_queue=" -Dmapreduce.job.queuename=${queue_name} "
+else
+   pig_queue=""
+fi
+
+if [ "${queue_name}" != "" ]; then
+   hive_queue=" set mapreduce.job.queuename=${queue_name}; "
+else
+   hive_queue=""
+fi
+
+if [ "${queue_name}" != "" ]; then
+   impala_queue="set REQUEST_POOL=${queue_name};"
+else
+   impala_queue=""
+fi
+
+if [ "${queue_name}" != "" ]; then
+   sqoop_queue=" -Dmapreduce.job.queuename=${queue_name}"
+else
+   sqoop_queue=""
+fi
+while read line
+do
+pci_flag="`echo $line|cut -f1 -d'#'`"
+data_set="`echo $line|cut -f2 -d'#'`"
+source_table_status="`echo $line|cut -f3 -d'#'`"
+extract_file_flag="`echo  $line|cut -f4 -d'#'`"
+connect_string="`echo $line|cut -f5 -d'#'`"
+Table_Name="`echo $line|cut -f6 -d'#'`"
+Target_directory="`echo  $line|cut -f7 -d'#'`"
+mappers="`echo  $line|cut -f8 -d'#'`"
+split_by_column="`echo  $line|cut -f9 -d'#'`"
+compression="`echo  $line|cut -f10 -d'#'`"
+#criteria="`echo  $line|cut -f11 -d'#'`"
+filter_column="`echo  $line|cut -f12 -d'#'`"
+#condition="`echo  $line|cut -f12 -d'#'`"
+column_list="`echo  $line|cut -f13 -d'#'`"
+join_condition="`echo  $line|cut -f14 -d'#'`"
+delimiter="`echo  $line|cut -f15 -d'#'`"
+echo "condition from config file : $condition" >> $log_file
+#condition1="`echo $condition | sed  \"s/process_date/${FORMAT_DATE}/g\"`"
+
+echo "condition1: $condition1" >> $log_file
+if [ "${split_by_column}" == "" ]; then
+   split=""
+else
+   split="--split-by $split_by_column"
+fi
+
+
+#Source_Table=`echo $Target_directory | cut -c4-50`
+
+echo "table_name=$Target_directory"         >>$log_file
+
+if [ "${source_table_status}" == "E" ]; then
+
+   echo "Main Source_table $Table_Name is Enabled"  >> $log_file
+   echo "Main Proceed further" >> $log_file
+
+   if [ "${extract_file_flag}" == "N" ]; then
+      echo  " File has been extracted already "  >> $log_file
+
+   else
+        echo "Sqoop import for $Table_Name begins"  >> $log_file
+        echo "Process Sqoop condition ${filter_tmp2}" >>$log_file
+        start_time=`date +%m/%d/%Y" "%T`
+        echo "Start time:$start_time"  >> $log_file
+        echo "Process starts for : $Data_Raw_Org/$data_set/$Source_Table/$extract_stamp" >>$log_file
+
+         #Query the ADM_CNTRL_TBL to calculate the actual start date
+echo "hive_queue : ${hive_queue}"       >> $log_file
+echo "db_name: $db_name" >> $log_file
+echo "Target : $Target_directory" >> $log_file
+start_dt=$query_date
+#start_dt=`hive -e " ${hive_queue} select date_sub(start_date,back_date_inv) as start_dt_temp from $db_name.adm_cntrl_tbl where dataset='$Target_directory'"`
+        echo "start_dt:  $start_dt" >> $log_file
+        #start_dt =$start_dt_temp
+        #start_dt="`echo \"$start_dt_temp 00:00:00\"`"
+#       echo "start_dt $start_dt" >> $log_file
+
+        #Query the ADM_CNTRL_TBL to calculate the actual end date
+end_dt=$query_date
+       # end_dt=`hive -e " ${hive_queue} select date_add(end_date,forwd_date_inv) as end_dt_temp  from $db_name.adm_cntrl_tbl where dataset='$Target_directory'"`
+        #end_dt=$end_dt_temp
+        #end_dt="`echo \"$end_dt_temp 23:59:59\"`"
+        echo "end_dt $end_dt" >> $log_file
+
+        filter_tmp1="`echo $filter_column | sed \"s/start_dt/${start_dt}/g\"`"
+        filter_tmp2="`echo $filter_tmp1 | sed \"s/end_dt/${end_dt}/g\"`"
+        echo "filter condition : $filter_tmp2" >> $log_file
+        echo " join table : $join_condition"  >> $log_file
+
+       # updt_by=`hive -e " ${hive_queue} select updt_by from $db_name.adm_cntrl_tbl where dataset='$Target_directory'"`
+        #updt_dt=`hive -e " ${hive_queue} select updt_dt from $db_name.adm_cntrl_tbl where dataset='$Target_directory'"`
+        echo "start_dt=$start_dt"         >>$log_file
+        echo "end_dt=$end_dt"         >>$log_file
+
+       if [ "${column_list}" == "" ]; then
+
+##--split-by $split_by_column
+
+  sqoop import -Dmapreduce.job.queuename=$sqoop_queue -Dhadoop.security.credential.provider.path=jceks://hdfs//data/pci/vantiv/keeper/mcry_rmb_elt_user.jceks -connect "$connect_string" -username DNA_ELT_USER -password-alias dna_elt_user.password   --query "SELECT * FROM  $Table_Name A $join_condition WHERE $filter_tmp2  \$CONDITIONS"  --fields-terminated-by "$delimiter" --target-dir "$Data_Raw_Org/$data_set/$Target_directory/$extract_stamp/process=monthly" -m $mappers   $split  --hive-drop-import-delims $compression --null-string "" --null-non-string ""
+
+          if [ $? -eq 0 ]; then
+             echo "$Table_Name import has completed successfully"         >>$log_file
+#             hadoop fs -cp $Data_Raw_Org/$data_set/$Target_directory/extract_tmp/*  $Data_Raw_Org/$data_set/$Target_directory/extract_date=$query_date/
+#            hadoop fs -rm -r -skipTrash $Data_Raw_Org/$data_set/$Target_directory/extract_tmp
+          else
+              echo "ERROR Import Failed for $Table_Name         "         >>$log_file
+                 hadoop fs -put $log_file ${log_dir}/log/
+                 rm -r ${tmpDir}
+				exit 20
+          fi
+
+        else
+
+sqoop import -Dmapreduce.job.queuename=$sqoop_queue -Dhadoop.security.credential.provider.path=jceks://hdfs//data/pci/vantiv/keeper/mcry_rmb_elt_user.jceks -connect "$connect_string" -username DNA_ELT_USER -password-alias dna_elt_user.password  --query "SELECT ${column_list} FROM  $Table_Name A $join_condition  WHERE  $filter_tmp2  \$CONDITIONS"  --fields-terminated-by "$delimiter" --target-dir "$Data_Raw_Org/$data_set/$Target_directory/$extract_stamp/process=monthly" -m $mappers  $split --hive-drop-import-delims $compression  --null-string "" --null-non-string ""
+
+
+          if [ $? -eq 0 ]; then
+             echo "$Table_Name import has completed successfully"         >>$log_file
+             #hadoop fs -mv $Data_Raw_Org/$data_set/$Target_directory/extractdate9999 $Data_Raw_Org/$data_set/$Target_directory/$extract_stamp
+#               hadoop fs -cp $Data_Raw_Org/$data_set/$Target_directory/extract_tmp/*  $Data_Raw_Org/$data_set/$Target_directory/extract_date=$query_date/
+ #            hadoop fs -rm -r -skipTrash $Data_Raw_Org/$data_set/$Target_directory/extract_tmp
+
+          else
+              echo "ERROR Import Failed for $Table_Name         "         >>$log_file
+               hadoop fs -put $log_file ${log_dir}/log/
+               rm -r ${tmpDir}
+			  exit 20
+          fi
+
+       fi
+
+       #hadoop fs -test -z $Data_Raw_Org/$data_set/$Source_Table/$extract_stamp/*   ==> this doesnt work properly for 0 size snappy files
+        no_of_records=`hadoop fs -cat $Data_Raw_Org/$data_set/$Target_directory/$extract_stamp/process=monthly/* | wc -l`
+       #if [ $? -eq 0 ]; then
+        if [ "$no_of_records" -eq "0" ]; then
+          echo "WARNING- Zero Byte File  : $Data_Raw_Org/$data_set/$Target_directory/$extract_stamp/process=monthly/  "  >> $log_file
+          echo "WARNING- Removing File. "  >> $log_file
+          hadoop fs -rm -r -skipTrash $Data_Raw_Org/$data_set/$Target_directory/$extract_stamp/process=monthly
+       fi
+
+        #else
+        echo "$Table_Name import has completed successfully"         >>$log_file
+        end_time=`date +%m/%d/%Y" "%T`
+        echo "End time:$end_time" >> $log_file
+        hadoop fs -ls $Data_Raw_Org/$data_set/$Target_directory/$extract_stamp >>$log_file
+
+        hive -e " ${hive_queue} msck repair table ${db_name}.${Target_directory};"
+        echo "Hive msck repair table for  ${db_name}.${Target_directory} is complete" >>$log_file
+
+        impala-shell --ssl -q "refresh $Target_directory" -d  ${db_name}
+        echo "Impala Shell Refresh for  ${db_name}.${Target_directory} is complete" >>$log_file
+	
+         impala-shell --ssl -q " ${impala_pool} COMPUTE INCREMENTAL STATS ${db_name}.${Target_directory} partition(extract_date='$TODAY') ;"
+
+       #Start - Logic ==> ADM_CNTRL_TBL overwrite commands
+        #if [ "${filter_tmp2}" == "" ]; then
+         # echo "No overwrite commans executed for this Table" >>$log_file
+       # else
+
+       #hive -e " ${hive_queue} insert overwrite table $db_name.adm_cntrl_tbl partition(dataset='$Target_directory') values ('rmb','$ctl_update_start_date','$ctl_update_end_date',0,0,'s1p.abda_ingest','$FORMAT_DATE','$updt_by','$updt_dt')"
+
+        #hive -e "msck repair table  $db_name.adm_cntrl_tbl"
+        #impala-shell --ssl -q "refresh adm_cntrl_tbl" -d  ${db_name}
+
+        #echo "$Target_directory partition has been overwritten in adm_cntrl_tbl"  >>$log_file
+        #echo "Hive msck repair and Impala refresh for ${db_name}.adm_cntrl_tbl is complete"  >>$log_file
+        #echo "insert overwrite table $db_name.adm_cntrl_tbl partition(dataset='$Target_directory') values ('rmb','$FORMAT_DATE','$FORMAT_DATE',0,0,'s1p.abda_ingest','$FORMAT_DATE','$updt_by','$updt_dt')" >>$log_file
+
+        #fi
+      # End - Logic ==> ADM_CNTRL_TBL Overwrite commands
+        #echo "------------------------------------------------------------" >>$log_file
+
+   fi
+
+else
+   echo "Source_table $Table_Name is Disabled"  >>$log_file
+fi
+
+done <"$config_file"
+hadoop fs -rm -skipTrash ${Sterling}/mercury_rmb_monthly_done.tag
+
+#if [ -f ${app_dir}/scripts/ingest_mercury_rmb_date_incremental_monthly.txt ]; then
+  # hadoop fs -rm -r -skipTrash #${app_dir}/config/scripts/ingest_mercury_rmb_date_incremental_monthly.txt
+ #  hadoop fs -touchz #${app_dir}/scripts/config/ingest_mercury_rmb_date_incremental_monthly.txt
+#else
+ #  echo "no override date parm present.. Removing None" >> $log_file
+#fi
+
+ hadoop fs -put $log_file ${log_dir}/log/
